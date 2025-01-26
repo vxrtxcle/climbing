@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MoveNet Video Processor</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+
+    canvas {
+      border: 1px solid black;
+      width: 100%;
+      height: auto;
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h1>MoveNet Video Processor</h1>
+
+  <h2>Process Primary Video</h2>
+  <input type="file" id="videoInput" accept="video/*">
+  <canvas id="outputCanvas"></canvas>
+
+  <h2>Overlay on Secondary Video</h2>
+  <input type="file" id="overlayVideoInput" accept="video/*">
+  <canvas id="overlayCanvas"></canvas>
+
+  <script>
+    const videoInput = document.getElementById('videoInput');
+    const overlayVideoInput = document.getElementById('overlayVideoInput');
+    const canvas = document.getElementById('outputCanvas');
+    const overlayCanvas = document.getElementById('overlayCanvas');
+    const ctx = canvas.getContext('2d');
+    const overlayCtx = overlayCanvas.getContext('2d');
+
+    let keypointsFrames = []; // To store keypoints from all frames of the primary video
+
+    const drawSkeleton = (keypoints, ctx, useDynamicColors = false) => {
+      const adjacentPairs = poseDetection.util.getAdjacentPairs(
+        poseDetection.SupportedModels.MoveNet
+      );
+
+      adjacentPairs.forEach(([i, j]) => {
+        const kp1 = keypoints[i];
+        const kp2 = keypoints[j];
+
+        if (kp1.score > 0.5 && kp2.score > 0.5) {
+          const averageScore = (kp1.score + kp2.score) / 2;
+          let color;
+
+          if (useDynamicColors) {
+            color = `rgb(${765 - averageScore * 1020}, ${averageScore * 1020 - 510}, 255)`;
+          } else {
+            color = "green";
+          }
+
+          ctx.beginPath();
+          ctx.moveTo(kp1.x, kp1.y);
+          ctx.lineTo(kp2.x, kp2.y);
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+      });
+    };
+
+    const processPrimaryVideo = (video, canvas, ctx) => {
+      const processFrame = async (detector) => {
+        if (!video.paused && !video.ended) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+          const poses = await detector.estimatePoses(video);
+
+          if (poses.length > 0) {
+            keypointsFrames.push(poses[0].keypoints); // Save keypoints for each frame
+            drawSkeleton(poses[0].keypoints, ctx);
+
+            poses[0].keypoints.forEach(({ x, y, score }) => {
+              if (score >= 0.75) {
+                ctx.beginPath();
+                ctx.arc(x, y, 3.8, 0, 2 * Math.PI);
+                ctx.fillStyle = "green";
+                ctx.fill();
+              } else if (score > 0.5) {
+                ctx.beginPath();
+                ctx.arc(x, y, 3.8, 0, 2 * Math.PI);
+                ctx.fillStyle = `rgb(${765 - score * 1020}, ${score * 1020 - 510}, 0)`;
+                ctx.fill();
+              }
+            });
+          }
+
+          requestAnimationFrame(() => processFrame(detector));
+        }
+      };
+
+      video.onloadeddata = async () => {
+        const detector = await poseDetection.createDetector(
+          poseDetection.SupportedModels.MoveNet,
+          { modelType: poseDetection.movenet.modelType.SINGLEPOSE_THUNDER }
+        );
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        video.play();
+        processFrame(detector);
+      };
+    };
+
+    const processOverlayVideo = (video, canvas, ctx) => {
+      let frameIndex = 0; // Track the frame for the overlay
+
+      const processFrame = async (detector) => {
+        if (!video.paused && !video.ended) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+          // Analyze the secondary video with MoveNet
+          const poses = await detector.estimatePoses(video);
+          if (poses.length > 0) {
+            drawSkeleton(poses[0].keypoints, ctx, true); // Draw skeleton for the secondary video using dynamic colors
+
+            poses[0].keypoints.forEach(({ x, y, score }) => {
+              if (score >= 0.75) {
+                ctx.beginPath();
+                ctx.arc(x, y, 3.8, 0, 2 * Math.PI);
+                ctx.fillStyle = "blue";
+                ctx.fill();
+              } else if (score > 0.5) {
+                ctx.beginPath();
+                ctx.arc(x, y, 3.8, 0, 2 * Math.PI);
+                ctx.fillStyle = `rgb(${765 - score * 1020}, ${score * 1020 - 510}, 255)`;
+                ctx.fill();
+              }
+            });
+          }
+
+          // Overlay keypoints from the primary video onto the secondary video
+          if (keypointsFrames.length > 0 && frameIndex < keypointsFrames.length) {
+            const keypoints = keypointsFrames[frameIndex];
+            drawSkeleton(keypoints, ctx);
+
+            keypoints.forEach(({ x, y, score }) => {
+              if (score >= 0.75) {
+                ctx.beginPath();
+                ctx.arc(x, y, 3.8, 0, 2 * Math.PI);
+                ctx.fillStyle = "green";
+                ctx.fill();
+              } else if (score > 0.5) {
+                ctx.beginPath();
+                ctx.arc(x, y, 3.8, 0, 2 * Math.PI);
+                ctx.fillStyle = `rgb(${765 - score * 1020}, ${score * 1020 - 510}, 0)`;
+                ctx.fill();
+              }
+            });
+
+            frameIndex++; // Move to the next frame of keypoints
+          }
+
+          requestAnimationFrame(() => processFrame(detector));
+        }
+      };
+
+      video.onloadeddata = async () => {
+        const detector = await poseDetection.createDetector(
+          poseDetection.SupportedModels.MoveNet,
+          { modelType: poseDetection.movenet.modelType.SINGLEPOSE_THUNDER }
+        );
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+
+        video.play();
+        processFrame(detector);
+      };
+    };
+
+    videoInput.addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      if (file) {
+        const video = document.createElement('video');
+        video.src = URL.createObjectURL(file);
+        video.loop = false;
+        video.muted = true;
+        keypointsFrames = []; // Reset keypointsFrames when a new primary video is loaded
+        processPrimaryVideo(video, canvas, ctx);
+      }
+    });
+
+    overlayVideoInput.addEventListener('change', (event) => {
+      const file = event.target.files[0];
+      if (file) {
+        const video = document.createElement('video');
+        video.src = URL.createObjectURL(file);
+        video.loop = false;
+        video.muted = true;
+        processOverlayVideo(video, overlayCanvas, overlayCtx);
+      }
+    });
+  </script>
+</body>
+</html>

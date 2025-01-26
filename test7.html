@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MoveNet Video Processor</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+
+    video {
+      display: block;
+      width: 100%;
+      margin-bottom: 20px;
+    }
+
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h1>MoveNet Video Processor</h1>
+  <input type="file" id="videoInput" accept="video/*">
+  <video id="outputVideo" controls muted></video>
+  <button id="downloadVideo" style="display: none;">Download Processed Video</button>
+  <button id="downloadJson" style="display: none;">Download Pose Data (JSON)</button>
+
+  <script>
+    const videoInput = document.getElementById('videoInput');
+    const outputVideo = document.getElementById('outputVideo');
+    const downloadVideoButton = document.getElementById('downloadVideo');
+    const downloadJsonButton = document.getElementById('downloadJson');
+
+    let jsonData = [];
+    let mediaRecorder;
+    let recordedChunks = [];
+
+    const drawSkeleton = (keypoints, ctx) => {
+      const adjacentPairs = poseDetection.util.getAdjacentPairs(
+        poseDetection.SupportedModels.MoveNet
+      );
+
+      adjacentPairs.forEach(([i, j]) => {
+        const kp1 = keypoints[i];
+        const kp2 = keypoints[j];
+
+        if (kp1.score >= 0.7 && kp2.score >= 0.7) {
+          ctx.beginPath();
+          ctx.moveTo(kp1.x, kp1.y);
+          ctx.lineTo(kp2.x, kp2.y);
+          ctx.strokeStyle = "green";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        } else if (kp1.score > 0.5 && kp2.score > 0.5) {
+          const average = (kp1.score + kp2.score) / 2;
+          ctx.beginPath();
+          ctx.moveTo(kp1.x, kp1.y);
+          ctx.lineTo(kp2.x, kp2.y);
+          ctx.strokeStyle = `rgb(${765 - average * 1020}, ${average * 1020 - 510}, 0)`;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+      });
+    };
+
+    videoInput.addEventListener('change', async (event) => {
+      const file = event.target.files[0];
+
+      if (file) {
+        const video = document.createElement('video');
+        video.src = URL.createObjectURL(file);
+        video.loop = false;
+        video.muted = true;
+
+        const stream = video.captureStream();
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp9' });
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) recordedChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = () => {
+          const blob = new Blob(recordedChunks, { type: 'video/mp4' });
+          const videoUrl = URL.createObjectURL(blob);
+          downloadVideoButton.href = videoUrl;
+          downloadVideoButton.download = 'processed_video.mp4';
+          downloadVideoButton.style.display = 'inline';
+        };
+
+        video.onloadeddata = async () => {
+          const detector = await poseDetection.createDetector(
+            poseDetection.SupportedModels.MoveNet,
+            { modelType: poseDetection.movenet.modelType.SINGLEPOSE_THUNDER }
+          );
+
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+
+          outputVideo.srcObject = canvas.captureStream();
+          mediaRecorder.start();
+
+          let lastTimestamp = 0;
+
+          const renderFrame = async () => {
+            if (!video.paused && !video.ended) {
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+              const poses = await detector.estimatePoses(video);
+
+              poses.forEach((pose) => {
+                drawSkeleton(pose.keypoints, ctx);
+
+                pose.keypoints.forEach(({ x, y, score }) => {
+                    console.log(score);
+                  if (score >= 0.7) {
+                    ctx.beginPath();
+                    ctx.arc(x, y, 4.5, 0, 2 * Math.PI);
+                    ctx.fillStyle = "green";
+                    ctx.fill();
+                  } else if (score > 0.5) {
+                    ctx.beginPath();
+                    ctx.arc(x, y, 4.5, 0, 2 * Math.PI);
+                    ctx.fillStyle = `rgb(${765 - score * 1020}, ${score * 1020 - 510}, 0)`;
+                    ctx.fill();
+                  }
+                });
+              });
+
+              const timestamp = video.currentTime.toFixed(1);
+              if (timestamp !== lastTimestamp) {
+                const poseData = {};
+
+                poses[0]?.keypoints.forEach((keypoint) => {
+                  const part = keypoint.name;
+                  poseData[part] = {
+                    x: keypoint.x / canvas.width,
+                    y: keypoint.y / canvas.height,
+                    confidence: keypoint.score,
+                  };
+                });
+
+                jsonData.push({
+                  timestamp: timestamp,
+                  pose_data: poseData,
+                  recommendation: "",
+                });
+
+                lastTimestamp = timestamp;
+              }
+
+              requestAnimationFrame(renderFrame);
+            }
+          };
+
+          video.addEventListener('play', renderFrame);
+
+          video.addEventListener('ended', () => {
+            mediaRecorder.stop();
+            const jsonBlob = new Blob([JSON.stringify(jsonData, null, 2)], {
+              type: 'application/json',
+            });
+            const jsonUrl = URL.createObjectURL(jsonBlob);
+            downloadJsonButton.href = jsonUrl;
+            downloadJsonButton.download = 'pose_data.json';
+            downloadJsonButton.style.display = 'inline';
+          });
+
+          video.play();
+        };
+
+        video.load();
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MoveNet Video Processor</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+    }
+
+    canvas {
+      border: 1px solid black;
+      width: 100%;
+      height: auto;
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>MoveNet Video Processor</h1>
+  <input type="file" id="videoInput" accept="video/*">
+  <canvas id="outputCanvas" class="hidden"></canvas>
+
+  <script>
+    const videoInput = document.getElementById('videoInput');
+    const canvas = document.getElementById('outputCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const handleVideoInput = async (event) => {
+      const file = event.target.files[0];
+
+      if (file) {
+        const video = document.createElement('video');
+        video.src = URL.createObjectURL(file);
+        video.loop = false;
+        video.muted = true;
+
+        video.onloadeddata = async () => {
+          const detector = await poseDetection.createDetector(
+            poseDetection.SupportedModels.MoveNet,
+            { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING }
+          );
+
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          canvas.classList.remove('hidden');
+
+          const drawSkeleton = (keypoints, ctx) => {
+            const adjacentPairs = poseDetection.util.getAdjacentPairs(
+              poseDetection.SupportedModels.MoveNet
+            );
+
+            adjacentPairs.forEach(([i, j]) => {
+              const kp1 = keypoints[i];
+              const kp2 = keypoints[j];
+
+              if (kp1.score >= 0.75 && kp2.score >= 0.75) {
+                const average = (kp1.score + kp2.score) / 2;
+                ctx.beginPath();
+                ctx.moveTo(kp1.x, kp1.y);
+                ctx.lineTo(kp2.x, kp2.y);
+                ctx.strokeStyle = "green";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+              } else if (kp1.score > 0.5 && kp2.score > 0.5) {
+                ctx.beginPath();
+                ctx.moveTo(kp1.x, kp1.y);
+                ctx.lineTo(kp2.x, kp2.y);
+                ctx.strokeStyle = "rgb(" + (765 - average * 1020) + "," + (average * 1020 - 510) + ", 0)";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+              }
+            });
+          };
+
+          const processFrame = async () => {
+            if (!video.paused && !video.ended) {
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+              const poses = await detector.estimatePoses(video);
+
+              poses.forEach((pose) => {
+                drawSkeleton(pose.keypoints, ctx);
+
+                pose.keypoints.forEach(({ x, y, score }) => {
+                  if (score >= 0.75) {
+                    ctx.beginPath();
+                    ctx.arc(x, y, 3.8, 0, 2 * Math.PI);
+                    ctx.fillStyle = "green";
+                    ctx.fill();
+                  }
+                  else if (score > 0.5) {
+                    ctx.beginPath();
+                    ctx.arc(x, y, 3.8, 0, 2 * Math.PI);
+                    ctx.fillStyle = "rgb(" + (765 - score * 1020) + "," + (score * 1020 - 510) + ", 0)";
+                    ctx.fill();
+                  }
+                });
+              });
+
+              requestAnimationFrame(processFrame);
+            }
+          };
+
+          video.play();
+          processFrame();
+        };
+
+        video.load();
+      }
+    };
+
+    videoInput.addEventListener('change', handleVideoInput);
+  </script>
+</body>
+</html>
